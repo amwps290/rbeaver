@@ -28,18 +28,35 @@ This directory contains GitHub Actions workflows for automated building, testing
 - Manual workflow dispatch (can be triggered from GitHub UI)
 
 **Features:**
-- **Aggressive Optimization**: Uses LTO, native CPU targeting, and panic=abort
-- **Binary Compression**: Uses UPX to reduce binary size by ~50-70%
+- **Safe Optimization**: Uses thin LTO and conservative optimization settings
+- **Binary Compression**: Uses UPX to reduce binary size (with fallback if compression fails)
 - **Archive Creation**: Creates tar.gz (Linux) and zip (Windows) packages
 - **Manual Release**: Option to create releases with custom tags
 - **Extended Retention**: Artifacts stored for 90 days
 
-**Optimization Flags:**
-```
-RUSTFLAGS="-C target-cpu=native -C opt-level=3 -C lto=fat -C codegen-units=1 -C panic=abort"
+**Optimization Profile:**
+```toml
+[profile.release-opt]
+inherits = "release"
+opt-level = 3
+lto = "thin"
+codegen-units = 1
+panic = "abort"
+strip = true
 ```
 
-### 3. Code Quality (`quality.yml`)
+### 3. Simple Build (`build-simple.yml`)
+
+**Triggers:**
+- Manual workflow dispatch (backup option for compatibility issues)
+
+**Features:**
+- **Basic Optimization**: Uses only safe, widely compatible optimization flags
+- **No Compression**: Avoids potential UPX compatibility issues
+- **Reliable Builds**: Designed for maximum compatibility across environments
+- **Quick Fallback**: Use when optimized builds encounter issues
+
+### 4. Code Quality (`quality.yml`)
 
 **Triggers:**
 - Push to `main` or `develop` branches
@@ -116,13 +133,23 @@ All workflows provide detailed logs and status badges. You can add these badges 
    - Usually related to MSVC toolchain issues
    - The workflow uses the official Microsoft-hosted runners
 
-3. **UPX compression fails**
+3. **Optimization build fails with LTO errors**
+   - Error: `options -C embed-bitcode=no and -C lto are incompatible`
+   - Solution: Use the "Simple Build" workflow as a fallback
+   - The optimized build now uses safer "thin" LTO instead of "fat" LTO
+
+4. **UPX compression fails**
    - UPX might fail on some binaries; this is handled gracefully
    - The uncompressed binary will still be available
+   - Error is logged but doesn't fail the build
 
-4. **Release creation fails**
+5. **Release creation fails**
    - Check that the tag follows semantic versioning (e.g., `v1.0.0`)
    - Ensure repository has proper permissions for Actions
+
+6. **Cargo profile errors**
+   - If custom profiles cause issues, the simple build uses standard release profile
+   - Check Rust version compatibility for advanced profile features
 
 ### Performance Considerations
 

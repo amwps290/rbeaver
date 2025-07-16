@@ -1,4 +1,4 @@
-name: Optimized Build
+name: Simple Build
 
 on:
   workflow_dispatch:
@@ -18,8 +18,8 @@ env:
   RUST_BACKTRACE: 1
 
 jobs:
-  build-optimized:
-    name: Optimized Build (${{ matrix.target }})
+  build-simple:
+    name: Simple Build (${{ matrix.target }})
     runs-on: ${{ matrix.os }}
     strategy:
       fail-fast: false
@@ -28,12 +28,10 @@ jobs:
           - target: x86_64-unknown-linux-gnu
             os: ubuntu-latest
             name: rbeaver-linux-x86_64
-            archive: tar.gz
             
           - target: x86_64-pc-windows-msvc
             os: windows-latest
             name: rbeaver-windows-x86_64.exe
-            archive: zip
 
     steps:
       - name: Checkout code
@@ -63,15 +61,7 @@ jobs:
             libxkbcommon-dev \
             libwayland-dev \
             libgl1-mesa-dev \
-            libegl1-mesa-dev \
-            upx-ucl
-
-      - name: Install UPX (Windows)
-        if: matrix.os == 'windows-latest'
-        run: |
-          Invoke-WebRequest -Uri "https://github.com/upx/upx/releases/download/v4.2.2/upx-4.2.2-win64.zip" -OutFile "upx.zip"
-          Expand-Archive -Path "upx.zip" -DestinationPath "."
-          Move-Item "upx-4.2.2-win64\upx.exe" "upx.exe"
+            libegl1-mesa-dev
 
       - name: Cache Cargo registry
         uses: actions/cache@v4
@@ -80,62 +70,38 @@ jobs:
             ~/.cargo/registry
             ~/.cargo/git
             target
-          key: ${{ runner.os }}-${{ matrix.target }}-optimized-cargo-${{ hashFiles('**/Cargo.lock') }}
+          key: ${{ runner.os }}-${{ matrix.target }}-simple-cargo-${{ hashFiles('**/Cargo.lock') }}
           restore-keys: |
-            ${{ runner.os }}-${{ matrix.target }}-optimized-cargo-
+            ${{ runner.os }}-${{ matrix.target }}-simple-cargo-
 
-      - name: Create optimized Cargo.toml
-        run: |
-          # Create a temporary optimized profile
-          cat >> Cargo.toml << 'EOF'
+      - name: Build release binary with basic optimization
+        run: cargo build --release --target ${{ matrix.target }}
+        env:
+          # Use only safe, compatible optimization flags
+          RUSTFLAGS: "-C opt-level=3"
 
-          [profile.release-opt]
-          inherits = "release"
-          opt-level = 3
-          lto = "thin"
-          codegen-units = 1
-          panic = "abort"
-          strip = true
-          EOF
-
-      - name: Build optimized release binary
-        run: cargo build --profile release-opt --target ${{ matrix.target }}
-
-      - name: Compress binary (Linux)
+      - name: Prepare binary (Linux)
         if: matrix.os == 'ubuntu-latest'
         run: |
-          cp target/${{ matrix.target }}/release-opt/rbeaver ${{ matrix.name }}
-          # Binary is already stripped due to profile.release-opt.strip = true
-          upx --best --lzma ${{ matrix.name }} || echo "UPX compression failed, continuing with uncompressed binary"
+          cp target/${{ matrix.target }}/release/rbeaver ${{ matrix.name }}
+          strip ${{ matrix.name }}
 
-      - name: Compress binary (Windows)
+      - name: Prepare binary (Windows)
         if: matrix.os == 'windows-latest'
         run: |
-          copy target\${{ matrix.target }}\release-opt\rbeaver.exe ${{ matrix.name }}
-          .\upx.exe --best --lzma ${{ matrix.name }} || echo "UPX compression failed, continuing with uncompressed binary"
-
-      - name: Create archive (Linux)
-        if: matrix.os == 'ubuntu-latest'
-        run: |
-          tar -czf ${{ matrix.name }}.tar.gz ${{ matrix.name }} README.md LICENSE
-
-      - name: Create archive (Windows)
-        if: matrix.os == 'windows-latest'
-        run: |
-          7z a ${{ matrix.name }}.zip ${{ matrix.name }} README.md LICENSE
+          copy target\${{ matrix.target }}\release\rbeaver.exe ${{ matrix.name }}
 
       - name: Upload artifact
         uses: actions/upload-artifact@v4
         with:
-          name: ${{ matrix.name }}-optimized
-          path: |
-            ${{ matrix.name }}.${{ matrix.archive }}
-          retention-days: 90
+          name: ${{ matrix.name }}-simple
+          path: ${{ matrix.name }}
+          retention-days: 30
 
-  create-manual-release:
-    name: Create Manual Release
+  create-simple-release:
+    name: Create Simple Release
     runs-on: ubuntu-latest
-    needs: build-optimized
+    needs: build-simple
     if: ${{ github.event.inputs.create_release == 'true' }}
     permissions:
       contents: write
@@ -151,14 +117,14 @@ jobs:
       - name: Display structure of downloaded files
         run: ls -la artifacts/
 
-      - name: Create manual release
+      - name: Create simple release
         uses: softprops/action-gh-release@v2
         with:
           tag_name: ${{ github.event.inputs.release_tag }}
-          name: RBeaver ${{ github.event.inputs.release_tag }}
+          name: RBeaver ${{ github.event.inputs.release_tag }} (Simple Build)
           files: |
-            artifacts/rbeaver-linux-x86_64-optimized/rbeaver-linux-x86_64.tar.gz
-            artifacts/rbeaver-windows-x86_64.exe-optimized/rbeaver-windows-x86_64.exe.zip
+            artifacts/rbeaver-linux-x86_64-simple/rbeaver-linux-x86_64
+            artifacts/rbeaver-windows-x86_64.exe-simple/rbeaver-windows-x86_64.exe
           generate_release_notes: true
           draft: false
           prerelease: false
