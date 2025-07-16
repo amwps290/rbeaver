@@ -134,40 +134,10 @@ impl eframe::App for RBeaverApp {
 }
 
 impl RBeaverApp {
-    pub fn new(cc: &eframe::CreationContext<'_>) -> Self {
+    pub fn new(_cc: &eframe::CreationContext<'_>) -> Self {
         log::info!("Initializing RBeaver application");
 
-        // Configure fonts for Chinese character support
-        Self::configure_fonts(&cc.egui_ctx);
-
         Self::default()
-    }
-
-    /// Configure fonts to support Chinese characters
-    fn configure_fonts(ctx: &egui::Context) {
-        // egui 0.28 has good Unicode support by default
-        // We'll configure it to ensure optimal Chinese character rendering
-
-        // Configure text rendering options for better Unicode support
-        let mut style = (*ctx.style()).clone();
-
-        // Set better spacing for CJK characters
-        style.spacing.item_spacing = egui::vec2(8.0, 4.0);
-        style.spacing.button_padding = egui::vec2(8.0, 4.0);
-
-        // Ensure text is rendered with proper Unicode support
-        style.text_styles.insert(
-            egui::TextStyle::Body,
-            egui::FontId::new(14.0, egui::FontFamily::Proportional),
-        );
-        style.text_styles.insert(
-            egui::TextStyle::Monospace,
-            egui::FontId::new(12.0, egui::FontFamily::Monospace),
-        );
-
-        ctx.set_style(style);
-
-        log::info!("Configured text rendering for Chinese character support");
     }
 
     fn render_menu_bar(&mut self, ctx: &egui::Context) {

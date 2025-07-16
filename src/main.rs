@@ -5,8 +5,7 @@ mod ui;
 mod utils;
 
 use app::RBeaverApp;
-use egui_chinese_font::setup_chinese_fonts;
-use ui::setup_light_theme;
+use ui::{setup_chinese_fonts, setup_light_theme};
 use utils::init_logging;
 
 fn main() -> Result<(), eframe::Error> {
@@ -27,8 +26,11 @@ fn main() -> Result<(), eframe::Error> {
         "RBeaver",
         options,
         Box::new(|cc| {
-            // load chinese font
-            // setup_chinese_fonts(&cc.egui_ctx).expect("无法加载中文字体");
+            // Setup Chinese font support
+            if let Err(e) = setup_chinese_fonts(&cc.egui_ctx) {
+                log::warn!("Failed to setup Chinese fonts: {}", e);
+                log::info!("Continuing with default Unicode font support");
+            }
 
             // Setup light theme
             setup_light_theme(&cc.egui_ctx);
