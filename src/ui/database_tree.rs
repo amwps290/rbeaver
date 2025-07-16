@@ -185,7 +185,7 @@ impl DatabaseTree {
                 // Tree content
                 ScrollArea::vertical()
                     .auto_shrink([false, false])
-                    .id_source("database_tree_scroll")
+                    .id_salt("database_tree_scroll")
                     .show(ui, |ui| {
                         self.render_tree_content(ui);
                     });
@@ -224,7 +224,7 @@ impl DatabaseTree {
         let connection_label = format!("{} {}", connection_icon, saved_connection.name);
 
         let header_response = CollapsingHeader::new(connection_label)
-            .id_source(format!("saved_connection_{}", saved_connection.id))
+            .id_salt(format!("saved_connection_{}", saved_connection.id))
             .default_open(connection_expanded)
             .show(ui, |ui| {
                 if is_connected {
@@ -260,31 +260,31 @@ impl DatabaseTree {
             if ui.button("🔗 Connect").clicked() {
                 self.pending_action =
                     Some((ConnectionAction::Connect, saved_connection.id.clone()));
-                ui.close_menu();
+                ui.close_kind(egui::UiKind::Menu);
             }
 
             if ui.button("✏️ Edit").clicked() {
                 self.pending_action = Some((ConnectionAction::Edit, saved_connection.id.clone()));
-                ui.close_menu();
+                ui.close_kind(egui::UiKind::Menu);
             }
 
             if ui.button("📋 Duplicate").clicked() {
                 self.pending_action =
                     Some((ConnectionAction::Duplicate, saved_connection.id.clone()));
-                ui.close_menu();
+                ui.close_kind(egui::UiKind::Menu);
             }
 
             if ui.button("📄 Copy Connection URL").clicked() {
                 self.pending_action =
                     Some((ConnectionAction::CopyUrl, saved_connection.id.clone()));
-                ui.close_menu();
+                ui.close_kind(egui::UiKind::Menu);
             }
 
             ui.separator();
 
             if ui.button("🗑️ Delete").clicked() {
                 self.pending_action = Some((ConnectionAction::Delete, saved_connection.id.clone()));
-                ui.close_menu();
+                ui.close_kind(egui::UiKind::Menu);
             }
         });
 
@@ -319,7 +319,7 @@ impl DatabaseTree {
         let connection_label = format!("{} {}", connection_icon, connection.connection_name);
 
         let header_response = CollapsingHeader::new(connection_label)
-            .id_source(format!("connection_{}", connection_id))
+            .id_salt(format!("connection_{}", connection_id))
             .default_open(connection_expanded)
             .show(ui, |ui| {
                 if connection.schemas.is_empty() {
@@ -377,7 +377,7 @@ impl DatabaseTree {
         };
 
         let header_response = CollapsingHeader::new(schema_label)
-            .id_source(format!("schema_{}_{}", connection_id, schema.name))
+            .id_salt(format!("schema_{}_{}", connection_id, schema.name))
             .default_open(schema_expanded)
             .show(ui, |ui| {
                 // Show object categories
@@ -489,7 +489,7 @@ impl DatabaseTree {
         let category_label = format!("{} {} ({})", icon, label, count);
 
         let header_response = CollapsingHeader::new(category_label)
-            .id_source(format!(
+            .id_salt(format!(
                 "category_{}_{}_{:?}",
                 connection_id, schema_name, category
             ))
@@ -642,7 +642,7 @@ impl DatabaseTree {
         };
 
         let header_response = CollapsingHeader::new(format!("{} {}", table_icon, table.name))
-            .id_source(format!(
+            .id_salt(format!(
                 "table_{}_{}_{}",
                 connection_id, schema_name, table.name
             ))
@@ -803,19 +803,19 @@ impl DatabaseTree {
         response.context_menu(|ui| {
             if ui.button("📋 Copy Name").clicked() {
                 ui.output_mut(|o| o.copied_text = view.name.clone());
-                ui.close_menu();
+                ui.close_kind(egui::UiKind::Menu);
             }
             if ui.button("👁 View Definition").clicked() {
                 // TODO: Show view definition
-                ui.close_menu();
+                ui.close_kind(egui::UiKind::Menu);
             }
             if ui.button("📊 Properties").clicked() {
                 // TODO: Show view properties
-                ui.close_menu();
+                ui.close_kind(egui::UiKind::Menu);
             }
             if ui.button("🔄 Refresh").clicked() {
                 // TODO: Refresh view
-                ui.close_menu();
+                ui.close_kind(egui::UiKind::Menu);
             }
         });
     }
@@ -870,23 +870,23 @@ impl DatabaseTree {
         response.context_menu(|ui| {
             if ui.button("📋 Copy Name").clicked() {
                 ui.output_mut(|o| o.copied_text = function.name.clone());
-                ui.close_menu();
+                ui.close_kind(egui::UiKind::Menu);
             }
             if ui.button("⚙️ View Definition").clicked() {
                 // TODO: Show function definition
-                ui.close_menu();
+                ui.close_kind(egui::UiKind::Menu);
             }
             if ui.button("📊 Properties").clicked() {
                 // TODO: Show function properties
-                ui.close_menu();
+                ui.close_kind(egui::UiKind::Menu);
             }
             if ui.button("▶️ Execute").clicked() {
                 // TODO: Execute function
-                ui.close_menu();
+                ui.close_kind(egui::UiKind::Menu);
             }
             if ui.button("🔄 Refresh").clicked() {
                 // TODO: Refresh function
-                ui.close_menu();
+                ui.close_kind(egui::UiKind::Menu);
             }
         });
     }
@@ -935,19 +935,19 @@ impl DatabaseTree {
         response.context_menu(|ui| {
             if ui.button("📋 Copy Name").clicked() {
                 ui.output_mut(|o| o.copied_text = trigger.name.clone());
-                ui.close_menu();
+                ui.close_kind(egui::UiKind::Menu);
             }
             if ui.button("⚡ View Definition").clicked() {
                 // TODO: Show trigger definition
-                ui.close_menu();
+                ui.close_kind(egui::UiKind::Menu);
             }
             if ui.button("📊 Properties").clicked() {
                 // TODO: Show trigger properties
-                ui.close_menu();
+                ui.close_kind(egui::UiKind::Menu);
             }
             if ui.button("🔄 Refresh").clicked() {
                 // TODO: Refresh trigger
-                ui.close_menu();
+                ui.close_kind(egui::UiKind::Menu);
             }
         });
     }
@@ -998,23 +998,23 @@ impl DatabaseTree {
         response.context_menu(|ui| {
             if ui.button("📋 Copy Name").clicked() {
                 ui.output_mut(|o| o.copied_text = sequence.name.clone());
-                ui.close_menu();
+                ui.close_kind(egui::UiKind::Menu);
             }
             if ui.button("🔢 View Definition").clicked() {
                 // TODO: Show sequence definition
-                ui.close_menu();
+                ui.close_kind(egui::UiKind::Menu);
             }
             if ui.button("📊 Properties").clicked() {
                 // TODO: Show sequence properties
-                ui.close_menu();
+                ui.close_kind(egui::UiKind::Menu);
             }
             if ui.button("⏭️ Next Value").clicked() {
                 // TODO: Get next sequence value
-                ui.close_menu();
+                ui.close_kind(egui::UiKind::Menu);
             }
             if ui.button("🔄 Refresh").clicked() {
                 // TODO: Refresh sequence
-                ui.close_menu();
+                ui.close_kind(egui::UiKind::Menu);
             }
         });
     }
@@ -1070,23 +1070,23 @@ impl DatabaseTree {
         response.context_menu(|ui| {
             if ui.button("📋 Copy Name").clicked() {
                 ui.output_mut(|o| o.copied_text = index.name.clone());
-                ui.close_menu();
+                ui.close_kind(egui::UiKind::Menu);
             }
             if ui.button("🗂️ View Definition").clicked() {
                 // TODO: Show index definition
-                ui.close_menu();
+                ui.close_kind(egui::UiKind::Menu);
             }
             if ui.button("📊 Properties").clicked() {
                 // TODO: Show index properties
-                ui.close_menu();
+                ui.close_kind(egui::UiKind::Menu);
             }
             if ui.button("📈 Statistics").clicked() {
                 // TODO: Show index statistics
-                ui.close_menu();
+                ui.close_kind(egui::UiKind::Menu);
             }
             if ui.button("🔄 Refresh").clicked() {
                 // TODO: Refresh index
-                ui.close_menu();
+                ui.close_kind(egui::UiKind::Menu);
             }
         });
     }
