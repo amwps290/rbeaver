@@ -1,7 +1,7 @@
 use crate::config::AppSettings;
 use crate::database::{
-    ConnectionParams, DatabaseConnection, DatabaseError, PostgreSQLConnection, QueryExecutor,
-    QueryResult,
+    ConnectionParams, DatabaseConnection, DatabaseError, ObjectCategory, PostgreSQLConnection,
+    QueryExecutor, QueryResult,
 };
 use crate::ui::{
     ConfirmationDialog, ConnectionAction, ConnectionDialog, DatabaseTree, DialogAction,
@@ -134,9 +134,40 @@ impl eframe::App for RBeaverApp {
 }
 
 impl RBeaverApp {
-    pub fn new(_cc: &eframe::CreationContext<'_>) -> Self {
+    pub fn new(cc: &eframe::CreationContext<'_>) -> Self {
         log::info!("Initializing RBeaver application");
+
+        // Configure fonts for Chinese character support
+        Self::configure_fonts(&cc.egui_ctx);
+
         Self::default()
+    }
+
+    /// Configure fonts to support Chinese characters
+    fn configure_fonts(ctx: &egui::Context) {
+        // egui 0.28 has good Unicode support by default
+        // We'll configure it to ensure optimal Chinese character rendering
+
+        // Configure text rendering options for better Unicode support
+        let mut style = (*ctx.style()).clone();
+
+        // Set better spacing for CJK characters
+        style.spacing.item_spacing = egui::vec2(8.0, 4.0);
+        style.spacing.button_padding = egui::vec2(8.0, 4.0);
+
+        // Ensure text is rendered with proper Unicode support
+        style.text_styles.insert(
+            egui::TextStyle::Body,
+            egui::FontId::new(14.0, egui::FontFamily::Proportional),
+        );
+        style.text_styles.insert(
+            egui::TextStyle::Monospace,
+            egui::FontId::new(12.0, egui::FontFamily::Monospace),
+        );
+
+        ctx.set_style(style);
+
+        log::info!("Configured text rendering for Chinese character support");
     }
 
     fn render_menu_bar(&mut self, ctx: &egui::Context) {
@@ -651,6 +682,29 @@ impl RBeaverApp {
                 // Load schemas for this specific connection
                 match self.runtime.block_on(connection.get_schemas()) {
                     Ok(schemas) => {
+                        // Load object counts for each schema
+                        for schema in &schemas {
+                            match self
+                                .runtime
+                                .block_on(connection.get_object_counts(&schema.name))
+                            {
+                                Ok(counts) => {
+                                    self.database_tree.set_object_counts(
+                                        connection_id,
+                                        schema.name.clone(),
+                                        counts,
+                                    );
+                                }
+                                Err(err) => {
+                                    log::warn!(
+                                        "Failed to load object counts for schema {}: {}",
+                                        schema.name,
+                                        err
+                                    );
+                                }
+                            }
+                        }
+
                         self.database_tree.set_schemas(connection_id, schemas);
                         log::info!("Loaded database schemas for connection: {}", connection_id);
                     }
@@ -759,6 +813,169 @@ impl RBeaverApp {
                             connection_id,
                             err
                         );
+                    }
+                }
+            }
+        }
+
+        // Get schemas that need object loading
+        let objects_to_load = self.database_tree.get_schemas_needing_objects();
+        for (connection_id, schema_name, category) in objects_to_load {
+            if let Some(connection) = self.connections.get(&connection_id) {
+                match category {
+                    ObjectCategory::Tables => {
+                        // Tables are already handled above
+                        continue;
+                    }
+                    ObjectCategory::Views => {
+                        match self.runtime.block_on(connection.get_views(&schema_name)) {
+                            Ok(views) => {
+                                self.database_tree.set_views(
+                                    &connection_id,
+                                    schema_name.clone(),
+                                    views,
+                                );
+                                log::info!(
+                                    "Loaded views for schema: {} in connection: {}",
+                                    schema_name,
+                                    connection_id
+                                );
+                            }
+                            Err(err) => {
+                                self.last_error = Some(format!(
+                                    "Failed to load views for schema {} in connection {}: {}",
+                                    schema_name, connection_id, err
+                                ));
+                                log::error!(
+                                    "Failed to load views for schema {} in connection {}: {}",
+                                    schema_name,
+                                    connection_id,
+                                    err
+                                );
+                            }
+                        }
+                    }
+                    ObjectCategory::Functions => {
+                        match self
+                            .runtime
+                            .block_on(connection.get_functions(&schema_name))
+                        {
+                            Ok(functions) => {
+                                self.database_tree.set_functions(
+                                    &connection_id,
+                                    schema_name.clone(),
+                                    functions,
+                                );
+                                log::info!(
+                                    "Loaded functions for schema: {} in connection: {}",
+                                    schema_name,
+                                    connection_id
+                                );
+                            }
+                            Err(err) => {
+                                self.last_error = Some(format!(
+                                    "Failed to load functions for schema {} in connection {}: {}",
+                                    schema_name, connection_id, err
+                                ));
+                                log::error!(
+                                    "Failed to load functions for schema {} in connection {}: {}",
+                                    schema_name,
+                                    connection_id,
+                                    err
+                                );
+                            }
+                        }
+                    }
+                    ObjectCategory::Triggers => {
+                        match self.runtime.block_on(connection.get_triggers(&schema_name)) {
+                            Ok(triggers) => {
+                                self.database_tree.set_triggers(
+                                    &connection_id,
+                                    schema_name.clone(),
+                                    triggers,
+                                );
+                                log::info!(
+                                    "Loaded triggers for schema: {} in connection: {}",
+                                    schema_name,
+                                    connection_id
+                                );
+                            }
+                            Err(err) => {
+                                self.last_error = Some(format!(
+                                    "Failed to load triggers for schema {} in connection {}: {}",
+                                    schema_name, connection_id, err
+                                ));
+                                log::error!(
+                                    "Failed to load triggers for schema {} in connection {}: {}",
+                                    schema_name,
+                                    connection_id,
+                                    err
+                                );
+                            }
+                        }
+                    }
+                    ObjectCategory::Sequences => {
+                        match self
+                            .runtime
+                            .block_on(connection.get_sequences(&schema_name))
+                        {
+                            Ok(sequences) => {
+                                self.database_tree.set_sequences(
+                                    &connection_id,
+                                    schema_name.clone(),
+                                    sequences,
+                                );
+                                log::info!(
+                                    "Loaded sequences for schema: {} in connection: {}",
+                                    schema_name,
+                                    connection_id
+                                );
+                            }
+                            Err(err) => {
+                                self.last_error = Some(format!(
+                                    "Failed to load sequences for schema {} in connection {}: {}",
+                                    schema_name, connection_id, err
+                                ));
+                                log::error!(
+                                    "Failed to load sequences for schema {} in connection {}: {}",
+                                    schema_name,
+                                    connection_id,
+                                    err
+                                );
+                            }
+                        }
+                    }
+                    ObjectCategory::Indexes => {
+                        match self.runtime.block_on(connection.get_indexes(&schema_name)) {
+                            Ok(indexes) => {
+                                self.database_tree.set_indexes(
+                                    &connection_id,
+                                    schema_name.clone(),
+                                    indexes,
+                                );
+                                log::info!(
+                                    "Loaded indexes for schema: {} in connection: {}",
+                                    schema_name,
+                                    connection_id
+                                );
+                            }
+                            Err(err) => {
+                                self.last_error = Some(format!(
+                                    "Failed to load indexes for schema {} in connection {}: {}",
+                                    schema_name, connection_id, err
+                                ));
+                                log::error!(
+                                    "Failed to load indexes for schema {} in connection {}: {}",
+                                    schema_name,
+                                    connection_id,
+                                    err
+                                );
+                            }
+                        }
+                    }
+                    ObjectCategory::SystemCatalog => {
+                        // TODO: Implement system catalog loading
+                        log::info!("System catalog loading not yet implemented");
                     }
                 }
             }

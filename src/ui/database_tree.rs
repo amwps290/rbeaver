@@ -1,4 +1,7 @@
-use crate::database::{Column, ConnectionParams, Schema, Table};
+use crate::database::{
+    Column, ConnectionParams, Function, Index, ObjectCategory, ObjectCounts, Schema, Sequence,
+    Table, Trigger, View,
+};
 use egui::{CollapsingHeader, ScrollArea, Ui};
 use std::collections::HashMap;
 
@@ -10,6 +13,12 @@ pub struct ConnectionNode {
     pub schemas: Vec<Schema>,
     pub tables: HashMap<String, Vec<Table>>,
     pub columns: HashMap<String, Vec<Column>>,
+    pub views: HashMap<String, Vec<View>>,
+    pub functions: HashMap<String, Vec<Function>>,
+    pub triggers: HashMap<String, Vec<Trigger>>,
+    pub sequences: HashMap<String, Vec<Sequence>>,
+    pub indexes: HashMap<String, Vec<Index>>,
+    pub object_counts: HashMap<String, ObjectCounts>,
     pub is_connected: bool,
 }
 
@@ -21,6 +30,12 @@ impl ConnectionNode {
             schemas: Vec::new(),
             tables: HashMap::new(),
             columns: HashMap::new(),
+            views: HashMap::new(),
+            functions: HashMap::new(),
+            triggers: HashMap::new(),
+            sequences: HashMap::new(),
+            indexes: HashMap::new(),
+            object_counts: HashMap::new(),
             is_connected: false,
         }
     }
@@ -33,11 +48,17 @@ pub struct DatabaseTree {
     expanded_connections: HashMap<String, bool>,
     expanded_saved_connections: HashMap<String, bool>,
     expanded_schemas: HashMap<String, bool>,
+    expanded_object_categories: HashMap<String, bool>, // (connection_id.schema.category)
     expanded_tables: HashMap<String, bool>,
     selected_item: Option<TreeItem>,
 
+    // Search and filtering
+    search_text: String,
+    show_search: bool,
+
     is_loading: bool,
     schemas_needing_tables: Vec<(String, String)>, // (connection_id, schema_name)
+    schemas_needing_objects: Vec<(String, String, ObjectCategory)>, // (connection_id, schema_name, category)
     tables_needing_columns: Vec<(String, String, String)>, // (connection_id, schema_name, table_name)
     pending_action: Option<(ConnectionAction, String)>,    // (action, connection_id)
 }
@@ -50,10 +71,40 @@ pub enum TreeItem {
         connection_id: String,
         schema: String,
     },
+    ObjectCategory {
+        connection_id: String,
+        schema: String,
+        category: ObjectCategory,
+    },
     Table {
         connection_id: String,
         schema: String,
         table: String,
+    },
+    View {
+        connection_id: String,
+        schema: String,
+        view: String,
+    },
+    Function {
+        connection_id: String,
+        schema: String,
+        function: String,
+    },
+    Trigger {
+        connection_id: String,
+        schema: String,
+        trigger: String,
+    },
+    Sequence {
+        connection_id: String,
+        schema: String,
+        sequence: String,
+    },
+    Index {
+        connection_id: String,
+        schema: String,
+        index: String,
     },
     Column {
         connection_id: String,
@@ -93,7 +144,32 @@ impl DatabaseTree {
                 if ui.button("Collapse All").clicked() {
                     self.collapse_all();
                 }
+
+                ui.separator();
+
+                // Search toggle button
+                let search_icon = if self.show_search { "🔍✖" } else { "🔍" };
+                if ui.button(search_icon).clicked() {
+                    self.show_search = !self.show_search;
+                    if !self.show_search {
+                        self.search_text.clear();
+                    }
+                }
             });
+
+            // Search bar
+            if self.show_search {
+                ui.horizontal(|ui| {
+                    ui.label("Search:");
+                    let response = ui.text_edit_singleline(&mut self.search_text);
+                    if response.changed() {
+                        // Search text changed - could trigger filtering here
+                    }
+                    if ui.button("Clear").clicked() {
+                        self.search_text.clear();
+                    }
+                });
+            }
 
             ui.separator();
 
@@ -277,20 +353,76 @@ impl DatabaseTree {
             .copied()
             .unwrap_or(false);
 
-        let header_response = CollapsingHeader::new(format!("📁 {}", schema.name))
+        // Get object counts for this schema
+        let counts = self
+            .connections
+            .get(connection_id)
+            .and_then(|conn| conn.object_counts.get(&schema.name))
+            .cloned()
+            .unwrap_or_default();
+
+        let total_objects = counts.tables
+            + counts.views
+            + counts.materialized_views
+            + counts.functions
+            + counts.procedures
+            + counts.triggers
+            + counts.sequences
+            + counts.indexes;
+
+        let schema_label = if total_objects > 0 {
+            format!("📁 {} ({})", schema.name, total_objects)
+        } else {
+            format!("📁 {}", schema.name)
+        };
+
+        let header_response = CollapsingHeader::new(schema_label)
             .id_source(format!("schema_{}_{}", connection_id, schema.name))
             .default_open(schema_expanded)
             .show(ui, |ui| {
-                // Show tables in this schema
-                if let Some(connection) = self.connections.get(connection_id) {
-                    if let Some(tables) = connection.tables.get(&schema.name).cloned() {
-                        for table in &tables {
-                            self.render_table_node(ui, connection_id, &schema.name, table);
-                        }
-                    } else {
-                        ui.label("Loading tables...");
-                    }
-                }
+                // Show object categories
+                self.render_object_category(
+                    ui,
+                    connection_id,
+                    &schema.name,
+                    ObjectCategory::Tables,
+                    &counts,
+                );
+                self.render_object_category(
+                    ui,
+                    connection_id,
+                    &schema.name,
+                    ObjectCategory::Views,
+                    &counts,
+                );
+                self.render_object_category(
+                    ui,
+                    connection_id,
+                    &schema.name,
+                    ObjectCategory::Functions,
+                    &counts,
+                );
+                self.render_object_category(
+                    ui,
+                    connection_id,
+                    &schema.name,
+                    ObjectCategory::Triggers,
+                    &counts,
+                );
+                self.render_object_category(
+                    ui,
+                    connection_id,
+                    &schema.name,
+                    ObjectCategory::Sequences,
+                    &counts,
+                );
+                self.render_object_category(
+                    ui,
+                    connection_id,
+                    &schema.name,
+                    ObjectCategory::Indexes,
+                    &counts,
+                );
             });
 
         // Track expansion state
@@ -298,11 +430,11 @@ impl DatabaseTree {
             let new_state = !schema_expanded;
             self.expanded_schemas.insert(schema_key, new_state);
 
-            // Load tables if expanding for the first time
+            // Load object counts if expanding for the first time
             if let Some(connection) = self.connections.get(connection_id) {
-                if new_state && !connection.tables.contains_key(&schema.name) {
-                    self.schemas_needing_tables
-                        .push((connection_id.to_string(), schema.name.clone()));
+                if new_state && !connection.object_counts.contains_key(&schema.name) {
+                    // Request object counts for this schema
+                    // This will be handled by the main application
                 }
             }
         }
@@ -314,6 +446,178 @@ impl DatabaseTree {
                 schema: schema.name.clone(),
             });
             // TODO: Show schema context menu
+        }
+    }
+
+    fn render_object_category(
+        &mut self,
+        ui: &mut Ui,
+        connection_id: &str,
+        schema_name: &str,
+        category: ObjectCategory,
+        counts: &ObjectCounts,
+    ) {
+        let (icon, label, count) = match category {
+            ObjectCategory::Tables => ("📋", "Tables", counts.tables),
+            ObjectCategory::Views => ("👁", "Views", counts.views + counts.materialized_views),
+            ObjectCategory::Functions => ("⚙️", "Functions", counts.functions + counts.procedures),
+            ObjectCategory::Triggers => ("⚡", "Triggers", counts.triggers),
+            ObjectCategory::Sequences => ("🔢", "Sequences", counts.sequences),
+            ObjectCategory::Indexes => ("🗂️", "Indexes", counts.indexes),
+            ObjectCategory::SystemCatalog => ("🔧", "System Catalog", 0),
+        };
+
+        // Skip categories with no objects
+        if count == 0 {
+            return;
+        }
+
+        // Skip categories with no matches when searching
+        if !self.search_text.is_empty()
+            && !self.category_has_matches(connection_id, schema_name, &category)
+        {
+            return;
+        }
+
+        let category_key = format!("{}.{}.{:?}", connection_id, schema_name, category);
+        let category_expanded = self
+            .expanded_object_categories
+            .get(&category_key)
+            .copied()
+            .unwrap_or(false);
+
+        let category_label = format!("{} {} ({})", icon, label, count);
+
+        let header_response = CollapsingHeader::new(category_label)
+            .id_source(format!(
+                "category_{}_{}_{:?}",
+                connection_id, schema_name, category
+            ))
+            .default_open(category_expanded)
+            .show(ui, |ui| {
+                self.render_objects_in_category(ui, connection_id, schema_name, &category);
+            });
+
+        // Track expansion state
+        if header_response.header_response.clicked() {
+            let new_state = !category_expanded;
+            self.expanded_object_categories
+                .insert(category_key, new_state);
+
+            // Load objects if expanding for the first time
+            if new_state {
+                match &category {
+                    ObjectCategory::Tables => {
+                        // Use existing table loading mechanism
+                        if let Some(connection) = self.connections.get(connection_id) {
+                            if !connection.tables.contains_key(schema_name) {
+                                self.schemas_needing_tables
+                                    .push((connection_id.to_string(), schema_name.to_string()));
+                            }
+                        }
+                    }
+                    _ => {
+                        // Use new object loading mechanism for other types
+                        self.schemas_needing_objects.push((
+                            connection_id.to_string(),
+                            schema_name.to_string(),
+                            category.clone(),
+                        ));
+                    }
+                }
+            }
+        }
+
+        // Handle category selection
+        if header_response.header_response.secondary_clicked() {
+            self.selected_item = Some(TreeItem::ObjectCategory {
+                connection_id: connection_id.to_string(),
+                schema: schema_name.to_string(),
+                category,
+            });
+            // TODO: Show category context menu
+        }
+    }
+
+    fn render_objects_in_category(
+        &mut self,
+        ui: &mut Ui,
+        connection_id: &str,
+        schema_name: &str,
+        category: &ObjectCategory,
+    ) {
+        if let Some(connection) = self.connections.get(connection_id) {
+            match category {
+                ObjectCategory::Tables => {
+                    if let Some(tables) = connection.tables.get(schema_name).cloned() {
+                        for table in &tables {
+                            if self.matches_search(&table.name) {
+                                self.render_table_node(ui, connection_id, schema_name, table);
+                            }
+                        }
+                    } else {
+                        ui.label("Loading tables...");
+                    }
+                }
+                ObjectCategory::Views => {
+                    if let Some(views) = connection.views.get(schema_name).cloned() {
+                        for view in &views {
+                            if self.matches_search(&view.name) {
+                                self.render_view_node(ui, connection_id, schema_name, view);
+                            }
+                        }
+                    } else {
+                        ui.label("Loading views...");
+                    }
+                }
+                ObjectCategory::Functions => {
+                    if let Some(functions) = connection.functions.get(schema_name).cloned() {
+                        for function in &functions {
+                            if self.matches_search(&function.name) {
+                                self.render_function_node(ui, connection_id, schema_name, function);
+                            }
+                        }
+                    } else {
+                        ui.label("Loading functions...");
+                    }
+                }
+                ObjectCategory::Triggers => {
+                    if let Some(triggers) = connection.triggers.get(schema_name).cloned() {
+                        for trigger in &triggers {
+                            if self.matches_search(&trigger.name) {
+                                self.render_trigger_node(ui, connection_id, schema_name, trigger);
+                            }
+                        }
+                    } else {
+                        ui.label("Loading triggers...");
+                    }
+                }
+                ObjectCategory::Sequences => {
+                    if let Some(sequences) = connection.sequences.get(schema_name).cloned() {
+                        for sequence in &sequences {
+                            if self.matches_search(&sequence.name) {
+                                self.render_sequence_node(ui, connection_id, schema_name, sequence);
+                            }
+                        }
+                    } else {
+                        ui.label("Loading sequences...");
+                    }
+                }
+                ObjectCategory::Indexes => {
+                    if let Some(indexes) = connection.indexes.get(schema_name).cloned() {
+                        for index in &indexes {
+                            if self.matches_search(&index.name) {
+                                self.render_index_node(ui, connection_id, schema_name, index);
+                            }
+                        }
+                    } else {
+                        ui.label("Loading indexes...");
+                    }
+                }
+                ObjectCategory::SystemCatalog => {
+                    ui.label("System catalog objects...");
+                }
+            }
         }
     }
 
@@ -454,6 +758,406 @@ impl DatabaseTree {
         }
     }
 
+    fn render_view_node(
+        &mut self,
+        ui: &mut Ui,
+        connection_id: &str,
+        schema_name: &str,
+        view: &View,
+    ) {
+        let view_icon = match view.view_type {
+            crate::database::ViewType::Materialized => "📊",
+            crate::database::ViewType::Regular => "👁",
+        };
+
+        let view_text = format!("{} {}", view_icon, view.name);
+        let response = ui.selectable_label(
+            self.selected_item
+                == Some(TreeItem::View {
+                    connection_id: connection_id.to_string(),
+                    schema: schema_name.to_string(),
+                    view: view.name.clone(),
+                }),
+            view_text,
+        );
+
+        if response.clicked() {
+            self.selected_item = Some(TreeItem::View {
+                connection_id: connection_id.to_string(),
+                schema: schema_name.to_string(),
+                view: view.name.clone(),
+            });
+        }
+
+        // Show view details on hover
+        let mut hover_text = format!("Type: {:?}", view.view_type);
+        if let Some(owner) = &view.owner {
+            hover_text.push_str(&format!("\nOwner: {}", owner));
+        }
+        if let Some(comment) = &view.comment {
+            hover_text.push_str(&format!("\nComment: {}", comment));
+        }
+        let response = response.on_hover_text(hover_text);
+
+        // Handle right-click context menu
+        response.context_menu(|ui| {
+            if ui.button("📋 Copy Name").clicked() {
+                ui.output_mut(|o| o.copied_text = view.name.clone());
+                ui.close_menu();
+            }
+            if ui.button("👁 View Definition").clicked() {
+                // TODO: Show view definition
+                ui.close_menu();
+            }
+            if ui.button("📊 Properties").clicked() {
+                // TODO: Show view properties
+                ui.close_menu();
+            }
+            if ui.button("🔄 Refresh").clicked() {
+                // TODO: Refresh view
+                ui.close_menu();
+            }
+        });
+    }
+
+    fn render_function_node(
+        &mut self,
+        ui: &mut Ui,
+        connection_id: &str,
+        schema_name: &str,
+        function: &Function,
+    ) {
+        let function_icon = match function.function_type {
+            crate::database::FunctionType::Procedure => "📋",
+            crate::database::FunctionType::Aggregate => "📊",
+            crate::database::FunctionType::Window => "🪟",
+            crate::database::FunctionType::Function => "⚙️",
+        };
+
+        let function_text = format!("{} {}", function_icon, function.name);
+        let response = ui.selectable_label(
+            self.selected_item
+                == Some(TreeItem::Function {
+                    connection_id: connection_id.to_string(),
+                    schema: schema_name.to_string(),
+                    function: function.name.clone(),
+                }),
+            function_text,
+        );
+
+        if response.clicked() {
+            self.selected_item = Some(TreeItem::Function {
+                connection_id: connection_id.to_string(),
+                schema: schema_name.to_string(),
+                function: function.name.clone(),
+            });
+        }
+
+        // Show function details on hover
+        let mut hover_text = format!(
+            "Type: {:?}\nLanguage: {}\nReturn Type: {}",
+            function.function_type, function.language, function.return_type
+        );
+        if let Some(owner) = &function.owner {
+            hover_text.push_str(&format!("\nOwner: {}", owner));
+        }
+        if let Some(comment) = &function.comment {
+            hover_text.push_str(&format!("\nComment: {}", comment));
+        }
+        let response = response.on_hover_text(hover_text);
+
+        // Handle right-click context menu
+        response.context_menu(|ui| {
+            if ui.button("📋 Copy Name").clicked() {
+                ui.output_mut(|o| o.copied_text = function.name.clone());
+                ui.close_menu();
+            }
+            if ui.button("⚙️ View Definition").clicked() {
+                // TODO: Show function definition
+                ui.close_menu();
+            }
+            if ui.button("📊 Properties").clicked() {
+                // TODO: Show function properties
+                ui.close_menu();
+            }
+            if ui.button("▶️ Execute").clicked() {
+                // TODO: Execute function
+                ui.close_menu();
+            }
+            if ui.button("🔄 Refresh").clicked() {
+                // TODO: Refresh function
+                ui.close_menu();
+            }
+        });
+    }
+
+    fn render_trigger_node(
+        &mut self,
+        ui: &mut Ui,
+        connection_id: &str,
+        schema_name: &str,
+        trigger: &Trigger,
+    ) {
+        let trigger_text = format!("⚡ {}", trigger.name);
+        let response = ui.selectable_label(
+            self.selected_item
+                == Some(TreeItem::Trigger {
+                    connection_id: connection_id.to_string(),
+                    schema: schema_name.to_string(),
+                    trigger: trigger.name.clone(),
+                }),
+            trigger_text,
+        );
+
+        if response.clicked() {
+            self.selected_item = Some(TreeItem::Trigger {
+                connection_id: connection_id.to_string(),
+                schema: schema_name.to_string(),
+                trigger: trigger.name.clone(),
+            });
+        }
+
+        // Show trigger details on hover
+        let mut hover_text = format!(
+            "Table: {}\nType: {:?}\nTiming: {:?}\nFunction: {}.{}",
+            trigger.table_name,
+            trigger.trigger_type,
+            trigger.timing,
+            trigger.function_schema,
+            trigger.function_name
+        );
+        if let Some(comment) = &trigger.comment {
+            hover_text.push_str(&format!("\nComment: {}", comment));
+        }
+        let response = response.on_hover_text(hover_text);
+
+        // Handle right-click context menu
+        response.context_menu(|ui| {
+            if ui.button("📋 Copy Name").clicked() {
+                ui.output_mut(|o| o.copied_text = trigger.name.clone());
+                ui.close_menu();
+            }
+            if ui.button("⚡ View Definition").clicked() {
+                // TODO: Show trigger definition
+                ui.close_menu();
+            }
+            if ui.button("📊 Properties").clicked() {
+                // TODO: Show trigger properties
+                ui.close_menu();
+            }
+            if ui.button("🔄 Refresh").clicked() {
+                // TODO: Refresh trigger
+                ui.close_menu();
+            }
+        });
+    }
+
+    fn render_sequence_node(
+        &mut self,
+        ui: &mut Ui,
+        connection_id: &str,
+        schema_name: &str,
+        sequence: &Sequence,
+    ) {
+        let sequence_text = format!("🔢 {}", sequence.name);
+        let response = ui.selectable_label(
+            self.selected_item
+                == Some(TreeItem::Sequence {
+                    connection_id: connection_id.to_string(),
+                    schema: schema_name.to_string(),
+                    sequence: sequence.name.clone(),
+                }),
+            sequence_text,
+        );
+
+        if response.clicked() {
+            self.selected_item = Some(TreeItem::Sequence {
+                connection_id: connection_id.to_string(),
+                schema: schema_name.to_string(),
+                sequence: sequence.name.clone(),
+            });
+        }
+
+        // Show sequence details on hover
+        let mut hover_text = format!(
+            "Type: {}\nIncrement: {}\nStart: {}",
+            sequence.data_type, sequence.increment, sequence.start_value
+        );
+        if let Some(last_value) = sequence.last_value {
+            hover_text.push_str(&format!("\nLast Value: {}", last_value));
+        }
+        if let Some(owner_table) = &sequence.owner_table {
+            hover_text.push_str(&format!("\nOwner Table: {}", owner_table));
+        }
+        if let Some(comment) = &sequence.comment {
+            hover_text.push_str(&format!("\nComment: {}", comment));
+        }
+        let response = response.on_hover_text(hover_text);
+
+        // Handle right-click context menu
+        response.context_menu(|ui| {
+            if ui.button("📋 Copy Name").clicked() {
+                ui.output_mut(|o| o.copied_text = sequence.name.clone());
+                ui.close_menu();
+            }
+            if ui.button("🔢 View Definition").clicked() {
+                // TODO: Show sequence definition
+                ui.close_menu();
+            }
+            if ui.button("📊 Properties").clicked() {
+                // TODO: Show sequence properties
+                ui.close_menu();
+            }
+            if ui.button("⏭️ Next Value").clicked() {
+                // TODO: Get next sequence value
+                ui.close_menu();
+            }
+            if ui.button("🔄 Refresh").clicked() {
+                // TODO: Refresh sequence
+                ui.close_menu();
+            }
+        });
+    }
+
+    fn render_index_node(
+        &mut self,
+        ui: &mut Ui,
+        connection_id: &str,
+        schema_name: &str,
+        index: &Index,
+    ) {
+        let index_icon = if index.is_primary {
+            "🔑"
+        } else if index.is_unique {
+            "🔒"
+        } else {
+            "🗂️"
+        };
+
+        let index_text = format!("{} {}", index_icon, index.name);
+        let response = ui.selectable_label(
+            self.selected_item
+                == Some(TreeItem::Index {
+                    connection_id: connection_id.to_string(),
+                    schema: schema_name.to_string(),
+                    index: index.name.clone(),
+                }),
+            index_text,
+        );
+
+        if response.clicked() {
+            self.selected_item = Some(TreeItem::Index {
+                connection_id: connection_id.to_string(),
+                schema: schema_name.to_string(),
+                index: index.name.clone(),
+            });
+        }
+
+        // Show index details on hover
+        let mut hover_text = format!(
+            "Table: {}\nType: {:?}\nUnique: {}\nPrimary: {}",
+            index.table_name, index.index_type, index.is_unique, index.is_primary
+        );
+        if index.is_partial {
+            hover_text.push_str("\nPartial: Yes");
+        }
+        if let Some(comment) = &index.comment {
+            hover_text.push_str(&format!("\nComment: {}", comment));
+        }
+        let response = response.on_hover_text(hover_text);
+
+        // Handle right-click context menu
+        response.context_menu(|ui| {
+            if ui.button("📋 Copy Name").clicked() {
+                ui.output_mut(|o| o.copied_text = index.name.clone());
+                ui.close_menu();
+            }
+            if ui.button("🗂️ View Definition").clicked() {
+                // TODO: Show index definition
+                ui.close_menu();
+            }
+            if ui.button("📊 Properties").clicked() {
+                // TODO: Show index properties
+                ui.close_menu();
+            }
+            if ui.button("📈 Statistics").clicked() {
+                // TODO: Show index statistics
+                ui.close_menu();
+            }
+            if ui.button("🔄 Refresh").clicked() {
+                // TODO: Refresh index
+                ui.close_menu();
+            }
+        });
+    }
+
+    /// Check if an item name matches the current search filter
+    fn matches_search(&self, name: &str) -> bool {
+        if self.search_text.is_empty() {
+            return true;
+        }
+        name.to_lowercase()
+            .contains(&self.search_text.to_lowercase())
+    }
+
+    /// Check if any object in a category matches the search filter
+    fn category_has_matches(
+        &self,
+        connection_id: &str,
+        schema_name: &str,
+        category: &ObjectCategory,
+    ) -> bool {
+        if self.search_text.is_empty() {
+            return true;
+        }
+
+        if let Some(connection) = self.connections.get(connection_id) {
+            match category {
+                ObjectCategory::Tables => {
+                    if let Some(tables) = connection.tables.get(schema_name) {
+                        return tables.iter().any(|table| self.matches_search(&table.name));
+                    }
+                }
+                ObjectCategory::Views => {
+                    if let Some(views) = connection.views.get(schema_name) {
+                        return views.iter().any(|view| self.matches_search(&view.name));
+                    }
+                }
+                ObjectCategory::Functions => {
+                    if let Some(functions) = connection.functions.get(schema_name) {
+                        return functions
+                            .iter()
+                            .any(|function| self.matches_search(&function.name));
+                    }
+                }
+                ObjectCategory::Triggers => {
+                    if let Some(triggers) = connection.triggers.get(schema_name) {
+                        return triggers
+                            .iter()
+                            .any(|trigger| self.matches_search(&trigger.name));
+                    }
+                }
+                ObjectCategory::Sequences => {
+                    if let Some(sequences) = connection.sequences.get(schema_name) {
+                        return sequences
+                            .iter()
+                            .any(|sequence| self.matches_search(&sequence.name));
+                    }
+                }
+                ObjectCategory::Indexes => {
+                    if let Some(indexes) = connection.indexes.get(schema_name) {
+                        return indexes.iter().any(|index| self.matches_search(&index.name));
+                    }
+                }
+                ObjectCategory::SystemCatalog => {
+                    // TODO: Implement system catalog search
+                    return false;
+                }
+            }
+        }
+        false
+    }
+
     pub fn add_connection(&mut self, connection_id: String, connection_name: String) {
         let connection = ConnectionNode::new(connection_id.clone(), connection_name);
         self.connections.insert(connection_id, connection);
@@ -501,10 +1205,47 @@ impl DatabaseTree {
         }
     }
 
+    pub fn set_views(&mut self, connection_id: &str, schema: String, views: Vec<View>) {
+        if let Some(connection) = self.connections.get_mut(connection_id) {
+            connection.views.insert(schema, views);
+        }
+    }
+
+    pub fn set_functions(&mut self, connection_id: &str, schema: String, functions: Vec<Function>) {
+        if let Some(connection) = self.connections.get_mut(connection_id) {
+            connection.functions.insert(schema, functions);
+        }
+    }
+
+    pub fn set_triggers(&mut self, connection_id: &str, schema: String, triggers: Vec<Trigger>) {
+        if let Some(connection) = self.connections.get_mut(connection_id) {
+            connection.triggers.insert(schema, triggers);
+        }
+    }
+
+    pub fn set_sequences(&mut self, connection_id: &str, schema: String, sequences: Vec<Sequence>) {
+        if let Some(connection) = self.connections.get_mut(connection_id) {
+            connection.sequences.insert(schema, sequences);
+        }
+    }
+
+    pub fn set_indexes(&mut self, connection_id: &str, schema: String, indexes: Vec<Index>) {
+        if let Some(connection) = self.connections.get_mut(connection_id) {
+            connection.indexes.insert(schema, indexes);
+        }
+    }
+
+    pub fn set_object_counts(&mut self, connection_id: &str, schema: String, counts: ObjectCounts) {
+        if let Some(connection) = self.connections.get_mut(connection_id) {
+            connection.object_counts.insert(schema, counts);
+        }
+    }
+
     pub fn clear(&mut self) {
         self.connections.clear();
         self.expanded_connections.clear();
         self.expanded_schemas.clear();
+        self.expanded_object_categories.clear();
         self.expanded_tables.clear();
         self.selected_item = None;
         self.is_loading = false;
@@ -576,6 +1317,12 @@ impl DatabaseTree {
         schemas
     }
 
+    pub fn get_schemas_needing_objects(&mut self) -> Vec<(String, String, ObjectCategory)> {
+        let schemas = self.schemas_needing_objects.clone();
+        self.schemas_needing_objects.clear();
+        schemas
+    }
+
     pub fn get_tables_needing_columns(&mut self) -> Vec<(String, String, String)> {
         let tables = self.tables_needing_columns.clone();
         self.tables_needing_columns.clear();
@@ -629,11 +1376,17 @@ impl Default for DatabaseTree {
             expanded_connections: HashMap::new(),
             expanded_saved_connections: HashMap::new(),
             expanded_schemas: HashMap::new(),
+            expanded_object_categories: HashMap::new(),
             expanded_tables: HashMap::new(),
             selected_item: None,
 
+            // Search and filtering
+            search_text: String::new(),
+            show_search: false,
+
             is_loading: false,
             schemas_needing_tables: Vec::new(),
+            schemas_needing_objects: Vec::new(),
             tables_needing_columns: Vec::new(),
             pending_action: None,
         }

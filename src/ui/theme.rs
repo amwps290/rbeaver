@@ -47,23 +47,21 @@ pub fn setup_light_theme(ctx: &Context) {
     visuals.warn_fg_color = Color32::from_rgb(255, 193, 7);
 
     // Window styling
-    visuals.window_rounding = Rounding::same(6.0);
     visuals.window_shadow = Shadow {
-        offset: egui::Vec2::new(2.0, 4.0),
-        blur: 8.0,
-        spread: 0.0,
+        offset: [2, 4],
+        blur: 0,
+        spread: 0,
         color: Color32::from_black_alpha(25),
     };
     visuals.window_stroke = Stroke::new(1.0, Color32::from_rgb(206, 212, 218));
 
     // Menu styling
-    visuals.menu_rounding = Rounding::same(4.0);
 
     // Popup styling
     visuals.popup_shadow = Shadow {
-        offset: egui::Vec2::new(1.0, 2.0),
-        blur: 6.0,
-        spread: 0.0,
+        offset: [1, 2],
+        blur: 6,
+        spread: 0,
         color: Color32::from_black_alpha(20),
     };
 
@@ -81,9 +79,9 @@ pub fn setup_light_theme(ctx: &Context) {
     // Spacing
     style.spacing.item_spacing = egui::Vec2::new(8.0, 6.0);
     style.spacing.button_padding = egui::Vec2::new(12.0, 6.0);
-    style.spacing.menu_margin = Margin::same(8.0);
+    style.spacing.menu_margin = Margin::same(8);
     style.spacing.indent = 20.0;
-    style.spacing.window_margin = Margin::same(8.0);
+    style.spacing.window_margin = Margin::same(8);
     // Note: scroll_bar_width is not available in egui 0.28
 
     // Text styles

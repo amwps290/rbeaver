@@ -117,8 +117,10 @@ impl ResultTable {
                     .striped(true)
                     .resizable(true)
                     .cell_layout(egui::Layout::left_to_right(egui::Align::Center))
+                    .min_scrolled_height(0.0)
+                    .max_scroll_height(f32::INFINITY)
                     .columns(
-                        egui_extras::Column::auto().resizable(true),
+                        egui_extras::Column::auto().resizable(true).clip(true),
                         if self.show_row_numbers { 1 } else { 0 } + result.column_count(),
                     )
                     .header(25.0, |mut header| {
@@ -178,17 +180,27 @@ impl ResultTable {
                                                 && self.selected_column == Some(col_idx);
 
                                             let text = self.format_cell_value(value);
-                                            let response = ui.selectable_label(is_selected, text);
 
-                                            if response.clicked() {
-                                                self.selected_row = Some(actual_row_idx);
-                                                self.selected_column = Some(col_idx);
-                                            }
+                                            // Disable text wrapping for table cells to prevent multi-line display
+                                            ui.style_mut().wrap_mode = None;
 
-                                            // Show full value on hover for long text
-                                            if value.to_display_string().len() > 50 {
-                                                response.on_hover_text(&value.to_display_string());
-                                            }
+                                            // Use a horizontal layout to ensure single-line display
+                                            ui.horizontal(|ui| {
+                                                ui.set_max_height(20.0); // Limit cell height to single line
+                                                let response =
+                                                    ui.selectable_label(is_selected, text);
+
+                                                if response.clicked() {
+                                                    self.selected_row = Some(actual_row_idx);
+                                                    self.selected_column = Some(col_idx);
+                                                }
+
+                                                // Show full value on hover for long text
+                                                let full_text = value.to_display_string();
+                                                if full_text.chars().count() > 50 {
+                                                    response.on_hover_text(&full_text);
+                                                }
+                                            });
                                         });
                                     }
                                 }
@@ -201,9 +213,11 @@ impl ResultTable {
     fn format_cell_value(&self, value: &QueryValue) -> String {
         let display = value.to_display_string();
 
-        // Truncate long values
-        if display.len() > 100 {
-            format!("{}...", &display[..97])
+        // Truncate long values safely for UTF-8 multi-byte characters
+        if display.chars().count() > 100 {
+            // Use character-based truncation instead of byte-based
+            let truncated: String = display.chars().take(97).collect();
+            format!("{}...", truncated)
         } else {
             display
         }

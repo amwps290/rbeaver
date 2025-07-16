@@ -185,9 +185,26 @@ impl ConnectionParams {
                     SslMode::VerifyFull => "verify-full",
                 };
 
+                // Build connection string with proper UTF-8 encoding support
+                let mut params = vec![
+                    format!("sslmode={}", ssl_mode),
+                    "client_encoding=UTF8".to_string(),
+                    "application_name=RBeaver".to_string(),
+                ];
+
+                // Add any additional parameters
+                for (key, value) in &self.additional_params {
+                    params.push(format!("{}={}", key, value));
+                }
+
                 format!(
-                    "postgresql://{}:{}@{}:{}/{}?sslmode={}",
-                    self.username, self.password, self.host, self.port, self.database, ssl_mode
+                    "postgresql://{}:{}@{}:{}/{}?{}",
+                    self.username,
+                    self.password,
+                    self.host,
+                    self.port,
+                    self.database,
+                    params.join("&")
                 )
             }
             DatabaseType::MySQL => {

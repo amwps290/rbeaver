@@ -1,6 +1,9 @@
 use crate::database::{
-    Column as DbColumn, ConnectionParams, Database, DatabaseConnection, DatabaseError,
-    GeometryValue, QueryColumn, QueryExecutor, QueryResult, QueryRow, QueryValue, Schema, Table,
+    ArgumentMode, Column as DbColumn, ConnectionParams, Database, DatabaseConnection,
+    DatabaseError, DatabaseObjectCounts, Function, FunctionArgument, FunctionType, GeometryValue,
+    Index, IndexColumn, IndexType, NullsOrder, ObjectCounts, QueryColumn, QueryExecutor,
+    QueryResult, QueryRow, QueryValue, Schema, Sequence, SortDirection, Table, Trigger,
+    TriggerEvent, TriggerTiming, TriggerType, View, ViewType,
 };
 use async_trait::async_trait;
 use sqlx::{Column, PgPool, Row, TypeInfo, ValueRef};
@@ -273,7 +276,7 @@ impl QueryExecutor for PostgreSQLConnection {
 
         let row = sqlx::query(
             "SELECT EXISTS (
-                 SELECT 1 FROM information_schema.tables 
+                 SELECT 1 FROM information_schema.tables
                  WHERE table_schema = $1 AND table_name = $2
              )",
         )
@@ -283,6 +286,280 @@ impl QueryExecutor for PostgreSQLConnection {
         .await?;
 
         Ok(row.get::<bool, _>(0))
+    }
+
+    async fn get_views(&self, schema: &str) -> Result<Vec<View>, DatabaseError> {
+        let pool = self.get_pool()?;
+
+        let rows = sqlx::query(crate::database::postgresql_queries::GET_VIEWS_QUERY)
+            .bind(schema)
+            .fetch_all(pool)
+            .await?;
+
+        let views = rows
+            .iter()
+            .map(|row| {
+                let view_type = match row.get::<String, _>("view_type").as_str() {
+                    "MATERIALIZED VIEW" => ViewType::Materialized,
+                    _ => ViewType::Regular,
+                };
+
+                let comment = row
+                    .try_get::<String, _>("comment")
+                    .ok()
+                    .filter(|s| !s.is_empty());
+
+                View {
+                    name: row.get::<String, _>("name"),
+                    schema: row.get::<String, _>("schema"),
+                    view_type,
+                    definition: row.try_get::<String, _>("definition").ok(),
+                    comment,
+                    owner: row.try_get::<String, _>("owner").ok(),
+                    is_updatable: row.get::<bool, _>("is_updatable"),
+                }
+            })
+            .collect();
+
+        Ok(views)
+    }
+
+    async fn get_functions(&self, schema: &str) -> Result<Vec<Function>, DatabaseError> {
+        let pool = self.get_pool()?;
+
+        let rows = sqlx::query(crate::database::postgresql_queries::GET_FUNCTIONS_QUERY)
+            .bind(schema)
+            .fetch_all(pool)
+            .await?;
+
+        let functions = rows
+            .iter()
+            .map(|row| {
+                let function_type = match row.get::<String, _>("function_type").as_str() {
+                    "PROCEDURE" => FunctionType::Procedure,
+                    "AGGREGATE" => FunctionType::Aggregate,
+                    "WINDOW" => FunctionType::Window,
+                    _ => FunctionType::Function,
+                };
+
+                let comment = row
+                    .try_get::<String, _>("comment")
+                    .ok()
+                    .filter(|s| !s.is_empty());
+
+                // Parse arguments - simplified for now
+                let arguments = parse_function_arguments(
+                    &row.try_get::<String, _>("arguments").unwrap_or_default(),
+                );
+
+                Function {
+                    name: row.get::<String, _>("name"),
+                    schema: row.get::<String, _>("schema"),
+                    function_type,
+                    return_type: row.get::<String, _>("return_type"),
+                    arguments,
+                    language: row.get::<String, _>("language"),
+                    definition: row.try_get::<String, _>("definition").ok(),
+                    comment,
+                    owner: row.try_get::<String, _>("owner").ok(),
+                }
+            })
+            .collect();
+
+        Ok(functions)
+    }
+
+    async fn get_triggers(&self, schema: &str) -> Result<Vec<Trigger>, DatabaseError> {
+        let pool = self.get_pool()?;
+
+        let rows = sqlx::query(crate::database::postgresql_queries::GET_TRIGGERS_QUERY)
+            .bind(schema)
+            .fetch_all(pool)
+            .await?;
+
+        let triggers = rows
+            .iter()
+            .map(|row| {
+                let trigger_type = match row.get::<String, _>("trigger_type").as_str() {
+                    "ROW" => TriggerType::Row,
+                    _ => TriggerType::Statement,
+                };
+
+                let timing = match row.get::<String, _>("timing").as_str() {
+                    "BEFORE" => TriggerTiming::Before,
+                    "INSTEAD_OF" => TriggerTiming::InsteadOf,
+                    _ => TriggerTiming::After,
+                };
+
+                let events =
+                    parse_trigger_events(&row.try_get::<String, _>("events").unwrap_or_default());
+
+                let comment = row
+                    .try_get::<String, _>("comment")
+                    .ok()
+                    .filter(|s| !s.is_empty());
+
+                Trigger {
+                    name: row.get::<String, _>("name"),
+                    schema: row.get::<String, _>("schema"),
+                    table_name: row.get::<String, _>("table_name"),
+                    trigger_type,
+                    events,
+                    timing,
+                    function_name: row.get::<String, _>("function_name"),
+                    function_schema: row.get::<String, _>("function_schema"),
+                    condition: row.try_get::<String, _>("condition").ok(),
+                    comment,
+                }
+            })
+            .collect();
+
+        Ok(triggers)
+    }
+
+    async fn get_sequences(&self, schema: &str) -> Result<Vec<Sequence>, DatabaseError> {
+        let pool = self.get_pool()?;
+
+        let rows = sqlx::query(crate::database::postgresql_queries::GET_SEQUENCES_QUERY)
+            .bind(schema)
+            .fetch_all(pool)
+            .await?;
+
+        let sequences = rows
+            .iter()
+            .map(|row| {
+                let comment = row
+                    .try_get::<String, _>("comment")
+                    .ok()
+                    .filter(|s| !s.is_empty());
+
+                Sequence {
+                    name: row.get::<String, _>("name"),
+                    schema: row.get::<String, _>("schema"),
+                    data_type: row.get::<String, _>("data_type"),
+                    start_value: row.get::<i64, _>("start_value"),
+                    min_value: row.try_get::<i64, _>("min_value").ok(),
+                    max_value: row.try_get::<i64, _>("max_value").ok(),
+                    increment: row.get::<i64, _>("increment"),
+                    cycle: row.get::<bool, _>("cycle"),
+                    cache_size: row.get::<i64, _>("cache_size"),
+                    last_value: row.try_get::<i64, _>("last_value").ok(),
+                    owner_table: row.try_get::<String, _>("owner_table").ok(),
+                    owner_column: row.try_get::<String, _>("owner_column").ok(),
+                    comment,
+                }
+            })
+            .collect();
+
+        Ok(sequences)
+    }
+
+    async fn get_indexes(&self, schema: &str) -> Result<Vec<Index>, DatabaseError> {
+        let pool = self.get_pool()?;
+
+        let rows = sqlx::query(crate::database::postgresql_queries::GET_INDEXES_QUERY)
+            .bind(schema)
+            .fetch_all(pool)
+            .await?;
+
+        let indexes = rows
+            .iter()
+            .map(|row| {
+                let index_type = match row.get::<String, _>("index_type").as_str() {
+                    "hash" => IndexType::Hash,
+                    "gist" => IndexType::Gist,
+                    "gin" => IndexType::Gin,
+                    "spgist" => IndexType::Spgist,
+                    "brin" => IndexType::Brin,
+                    _ => IndexType::BTree,
+                };
+
+                let columns =
+                    parse_index_columns(&row.try_get::<String, _>("columns").unwrap_or_default());
+
+                let comment = row
+                    .try_get::<String, _>("comment")
+                    .ok()
+                    .filter(|s| !s.is_empty());
+
+                Index {
+                    name: row.get::<String, _>("name"),
+                    schema: row.get::<String, _>("schema"),
+                    table_name: row.get::<String, _>("table_name"),
+                    index_type,
+                    columns,
+                    is_unique: row.get::<bool, _>("is_unique"),
+                    is_primary: row.get::<bool, _>("is_primary"),
+                    is_partial: row.get::<bool, _>("is_partial"),
+                    condition: row.try_get::<String, _>("condition").ok(),
+                    size: None, // TODO: Parse size from string
+                    comment,
+                }
+            })
+            .collect();
+
+        Ok(indexes)
+    }
+
+    async fn get_all_schemas(&self) -> Result<Vec<Schema>, DatabaseError> {
+        let pool = self.get_pool()?;
+
+        let rows = sqlx::query(crate::database::postgresql_queries::GET_ALL_SCHEMAS_QUERY)
+            .fetch_all(pool)
+            .await?;
+
+        let schemas = rows
+            .iter()
+            .map(|row| Schema {
+                name: row.get::<String, _>("schema_name"),
+                owner: row.try_get::<String, _>("schema_owner").ok(),
+            })
+            .collect();
+
+        Ok(schemas)
+    }
+
+    async fn get_object_counts(&self, schema: &str) -> Result<ObjectCounts, DatabaseError> {
+        let pool = self.get_pool()?;
+
+        let row = sqlx::query(crate::database::postgresql_queries::GET_OBJECT_COUNTS_QUERY)
+            .bind(schema)
+            .fetch_one(pool)
+            .await?;
+
+        Ok(ObjectCounts {
+            tables: row.get::<i64, _>("tables") as usize,
+            views: row.get::<i64, _>("views") as usize,
+            materialized_views: row.get::<i64, _>("materialized_views") as usize,
+            functions: row.get::<i64, _>("functions") as usize,
+            procedures: row.get::<i64, _>("procedures") as usize,
+            triggers: row.get::<i64, _>("triggers") as usize,
+            sequences: row.get::<i64, _>("sequences") as usize,
+            indexes: row.get::<i64, _>("indexes") as usize,
+        })
+    }
+
+    async fn get_database_object_counts(&self) -> Result<DatabaseObjectCounts, DatabaseError> {
+        let pool = self.get_pool()?;
+
+        let row =
+            sqlx::query(crate::database::postgresql_queries::GET_DATABASE_OBJECT_COUNTS_QUERY)
+                .fetch_one(pool)
+                .await?;
+
+        Ok(DatabaseObjectCounts {
+            schemas: row.get::<i64, _>("schemas") as usize,
+            user_schemas: row.get::<i64, _>("user_schemas") as usize,
+            system_schemas: row.get::<i64, _>("system_schemas") as usize,
+            total_tables: row.get::<i64, _>("total_tables") as usize,
+            total_views: row.get::<i64, _>("total_views") as usize,
+            total_materialized_views: row.get::<i64, _>("total_materialized_views") as usize,
+            total_functions: row.get::<i64, _>("total_functions") as usize,
+            total_procedures: row.get::<i64, _>("total_procedures") as usize,
+            total_triggers: row.get::<i64, _>("total_triggers") as usize,
+            total_sequences: row.get::<i64, _>("total_sequences") as usize,
+            total_indexes: row.get::<i64, _>("total_indexes") as usize,
+        })
     }
 }
 
@@ -315,7 +592,18 @@ fn convert_postgres_value(
         "INT8" | "BIGINT" => Ok(QueryValue::Int64(row.get(index))),
         "FLOAT4" | "REAL" => Ok(QueryValue::Float32(row.get(index))),
         "FLOAT8" | "DOUBLE PRECISION" => Ok(QueryValue::Float64(row.get(index))),
-        "TEXT" | "VARCHAR" | "CHAR" | "NAME" => Ok(QueryValue::String(row.get(index))),
+        "TEXT" | "VARCHAR" | "CHAR" | "NAME" => {
+            let text: String = row.get(index);
+            // Validate UTF-8 encoding and handle potential encoding issues
+            if text.is_ascii() || std::str::from_utf8(text.as_bytes()).is_ok() {
+                Ok(QueryValue::String(text))
+            } else {
+                log::warn!("Potential encoding issue detected in text field, attempting recovery");
+                // Try to recover by replacing invalid UTF-8 sequences
+                let recovered = String::from_utf8_lossy(text.as_bytes()).to_string();
+                Ok(QueryValue::String(recovered))
+            }
+        }
         "BYTEA" => Ok(QueryValue::Bytes(row.get(index))),
         "TIMESTAMP" | "TIMESTAMPTZ" => {
             let dt: chrono::DateTime<chrono::Utc> = row.get(index);
@@ -330,9 +618,21 @@ fn convert_postgres_value(
             handle_user_defined_type(row, index, column)
         }
         _ => {
-            // Fallback to string representation
+            // Fallback to string representation with encoding validation
             match row.try_get::<String, _>(index) {
-                Ok(s) => Ok(QueryValue::String(s)),
+                Ok(s) => {
+                    // Validate UTF-8 encoding for fallback strings
+                    if s.is_ascii() || std::str::from_utf8(s.as_bytes()).is_ok() {
+                        Ok(QueryValue::String(s))
+                    } else {
+                        log::warn!(
+                            "Encoding issue in fallback string conversion for type: {}",
+                            type_name
+                        );
+                        let recovered = String::from_utf8_lossy(s.as_bytes()).to_string();
+                        Ok(QueryValue::String(recovered))
+                    }
+                }
                 Err(_) => Ok(QueryValue::String(format!("<{}>", type_name))),
             }
         }
@@ -417,4 +717,76 @@ fn extract_srid_from_wkt(wkt: &str) -> Option<i32> {
     } else {
         None
     }
+}
+
+/// Parse function arguments from PostgreSQL function signature
+fn parse_function_arguments(args_str: &str) -> Vec<FunctionArgument> {
+    if args_str.is_empty() {
+        return Vec::new();
+    }
+
+    // Simple parsing - in a real implementation, this would be more sophisticated
+    args_str
+        .split(',')
+        .enumerate()
+        .map(|(i, arg)| {
+            let trimmed = arg.trim();
+            let parts: Vec<&str> = trimmed.split_whitespace().collect();
+
+            let (name, data_type) = if parts.len() >= 2 {
+                (Some(parts[0].to_string()), parts[1].to_string())
+            } else if parts.len() == 1 {
+                (None, parts[0].to_string())
+            } else {
+                (None, "unknown".to_string())
+            };
+
+            FunctionArgument {
+                name,
+                data_type,
+                mode: ArgumentMode::In, // Default to IN mode
+                default_value: None,
+            }
+        })
+        .collect()
+}
+
+/// Parse trigger events from comma-separated string
+fn parse_trigger_events(events_str: &str) -> Vec<TriggerEvent> {
+    if events_str.is_empty() {
+        return Vec::new();
+    }
+
+    events_str
+        .split(',')
+        .filter_map(|event| match event.trim().to_uppercase().as_str() {
+            "INSERT" => Some(TriggerEvent::Insert),
+            "UPDATE" => Some(TriggerEvent::Update),
+            "DELETE" => Some(TriggerEvent::Delete),
+            "TRUNCATE" => Some(TriggerEvent::Truncate),
+            _ => None,
+        })
+        .collect()
+}
+
+/// Parse index columns from comma-separated string
+fn parse_index_columns(columns_str: &str) -> Vec<IndexColumn> {
+    if columns_str.is_empty() {
+        return Vec::new();
+    }
+
+    columns_str
+        .split(',')
+        .enumerate()
+        .map(|(i, column)| {
+            let trimmed = column.trim();
+
+            IndexColumn {
+                name: trimmed.to_string(),
+                position: i as i32 + 1,
+                direction: Some(SortDirection::Ascending), // Default
+                nulls_order: None,
+            }
+        })
+        .collect()
 }

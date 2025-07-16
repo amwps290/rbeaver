@@ -1,5 +1,6 @@
 pub mod connection;
 pub mod postgresql;
+pub mod postgresql_queries;
 pub mod query;
 pub mod traits;
 
@@ -7,7 +8,12 @@ pub mod traits;
 pub use connection::{ConnectionManager, ConnectionParams, DatabaseType, SslMode};
 pub use postgresql::PostgreSQLConnection;
 pub use query::{GeometryValue, QueryColumn, QueryResult, QueryRow, QueryType, QueryValue};
-pub use traits::{Column, Database, DatabaseConnection, QueryExecutor, Schema, Table};
+pub use traits::{
+    ArgumentMode, Column, Database, DatabaseConnection, DatabaseObjectCounts, Function,
+    FunctionArgument, FunctionType, Index, IndexColumn, IndexType, NullsOrder, ObjectCategory,
+    ObjectCounts, QueryExecutor, Schema, Sequence, SortDirection, Table, Trigger, TriggerEvent,
+    TriggerTiming, TriggerType, View, ViewType,
+};
 
 // Error types
 use thiserror::Error;
