@@ -1,1 +1,33 @@
+# Rust
 /target
+Cargo.lock
+
+# IDE
+.vscode/
+.idea/
+*.swp
+*.swo
+*~
+
+# OS
+.DS_Store
+Thumbs.db
+
+# Logs
+*.log
+
+# GitHub Actions artifacts (local testing)
+artifacts/
+*.tar.gz
+*.zip
+
+# UPX binary (from optimized builds)
+upx
+upx.exe
+
+# Coverage reports
+lcov.info
+coverage/
+
+# Benchmark results
+criterion/
